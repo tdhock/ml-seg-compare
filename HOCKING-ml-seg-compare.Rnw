@@ -1,0 +1,161 @@
+\documentclass{article}
+
+\usepackage{fullpage}
+\usepackage{natbib}
+\usepackage{amsmath,amssymb,amsthm}
+
+\newcommand{\RR}{\mathbb R}
+
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\begin{document}
+\title{Comparing least squares segmentation code}
+\author{Toby Dylan Hocking}
+\maketitle
+
+\section{Introduction}
+
+Several articles describe methods for calculating the solution to the
+least squares segmentation problem, and the goal of this article is to
+compare their run-times.
+
+Given a sequence of noisy measurements $y\in\RR^n$ and a penalty
+parameter $\lambda\in\RR^+$, the problem is to find
+\begin{equation}
+  \label{eq:least_squares_segmentation}
+  \hat y = \argmin_{\mu\in\RR^n} \sum_{i=1}^n (y_i-\mu_i)^2 
+  + \lambda \sum_{i=1}^{n-1} I\left(\mu_i\neq\mu_{i+1}\right),
+\end{equation}
+where $I(\cdot)\in\{0,1\}$ is the indicator function. The penalty term
+counts the number of changes (equivalently, segments) in the estimated
+signal $\mu$.
+
+\section{Algorithms}
+
+There are several methods of solving this problem:
+
+\begin{itemize}
+\item \textbf{Pruned dynamic programming} is implemented in R package
+  \texttt{cghseg} on CRAN and provides the exact solution for several
+  model sizes \citep{pruned-dp}. In the code below, we fixed
+  $\texttt{maxSegments=15}$, which means that the algorithm reports the
+  optimal solution from 1 to 15 segments.
+\item \textbf{Pruned Exact Linear Time (PELT)} is implemented in R
+  package \texttt{changepoint} on CRAN and provides the exact solution
+  for one model size $\lambda$ \citep{killick_optimal_2011}. This
+  algorithm also provides an exact solution which is the same as
+  cghseg, but for only 1 model size. I would thus expect that PELT is
+  faster than cghseg.
+\item A \textbf{piecewise constant function (PCF)} fitting algorithm
+  is implemented in R package \texttt{copynumber} on Bioconductor and
+  provides an inexact solution for one model size
+  \citep{nilsen2012copynumber}. Since this algorithm uses heuristics
+  to search the model space, it returns a suboptimal solution and I
+  expected it to be faster than the other optimal algorithms.
+\item The \textbf{Segmentor3IsBack} R package on CRAN implements a
+  generic pruned dynamic programming algorithm that works with several
+  cost functions \citep{segmentor3}. Like \texttt{cghseg}, it returns
+  the optimal solution for several model sizes (from 1 to 15
+  segments), but its algorithm is more general so I expect it to be
+  slower.
+\end{itemize}
+
+\newpage
+First we install and load the indicated packages.
+
+<<setup,tidy=FALSE>>=
+options(repos=c(
+          "http://www.bioconductor.org/packages/release/bioc",
+          "http://r-forge.r-project.org",
+          "http://cran.ism.ac.jp"))
+works_with_R <- function(Rvers,...){
+  pkg_ok_have <- function(pkg,ok,have){
+    stopifnot(is.character(ok))
+    if(!as.character(have) %in% ok){
+      warning("works with ",pkg," version ",
+              paste(ok,collapse=" or "),
+              ", have ",have)
+    }
+  }
+  pkg_ok_have("R",Rvers,getRversion())
+  pkg.vers <- list(...)
+  suppressPackageStartupMessages({
+    for(pkg in names(pkg.vers)){
+      if(!suppressWarnings(require(pkg, character.only=TRUE))){
+        install.packages(pkg)
+      }
+      pkg_ok_have(pkg, pkg.vers[[pkg]], packageVersion(pkg))
+      library(pkg, character.only=TRUE)
+    }
+  })
+}
+works_with_R("3.0.1",cghseg="1.0.1",copynumber="1.1.1",
+             Segmentor3IsBack="1.5",
+             SegAnnot="1.2",changepoint="1.1",
+             microbenchmark="1.3.0")
+@ 
+
+If there are any package version mismatches, they should show up as
+warnings above.
+
+\newpage
+
+\section{Comparison}
+
+We apply these algorithms to a large copy number signal with
+$n=153663$ noisy observations on chr2 of an Affymetrix SNP6 microarray
+from a neuroblastoma tumor \citep{segannot}. We fit each model to
+these data 10 times, using the microbenchmark package to record the
+timings.
+
+<<benchmark,results="hide",tidy=FALSE>>=
+data(profiles,package="SegAnnot")
+pro <- profiles$hi$pro
+pcf.input <- data.frame(chr="2",pro)
+maxSegments <- 15
+times <-
+  microbenchmark(copynumber=pcf(pcf.input),
+                 Segmentor3IsBack=Segmentor(pro$logratio,model=2,Kmax=maxSegments),
+                 cghseg=with(pro, run.cghseg(logratio, position, maxSegments)),
+                 changepoint=cpt.mean(pro$logratio,method="PELT"),
+                 times=10)
+@ 
+
+<<output>>=
+print(times, "s")
+@ 
+
+It is clear that \texttt{cghseg} gives the fastest calculation. It is
+surprising that \texttt{cghseg} is faster than \texttt{changepoint},
+since \texttt{cghseg} returns the exact solution for several model
+sizes whereas \texttt{changepoint} returns only one.
+
+It is also surprising since \texttt{copynumber} uses heuristics to
+search the model space, and yields a suboptimal solution. This
+suboptimal solution comes with a speed benefit over
+\texttt{changepoint}, but not over \texttt{cghseg}.
+
+It is not surprising that \texttt{Segmentor3IsBack} is slower than
+\texttt{cghseg}. Despite the fact that both packages return the same
+segmentations, \texttt{cghseg} has the advantage since it uses an
+implentation that only works for the square loss.
+
+\section{Conclusion}
+
+Clearly, the best way to calculate the least squares segmentation
+(\ref{eq:least_squares_segmentation}) is using the \texttt{cghseg}
+package. It implements a method which is fastest and returns the
+exact, optimal solution for several model sizes.
+
+\bibliographystyle{abbrvnat}
+\bibliography{refs}
+
+My processor and R info follows.
+
+<<session>>=
+cpuinfo <- system("cat /proc/cpuinfo|grep 'model name'|head -1",intern=TRUE)
+print(cpuinfo)
+sessionInfo()
+@ 
+
+\end{document}
